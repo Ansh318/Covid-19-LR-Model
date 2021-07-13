@@ -1,0 +1,627 @@
+---
+title: "Final Project Report"
+author: "Adhit Sankaran, George Henry Crew Main, Kyllan Wunder, Ansh Agarwal"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE)
+library(tidyverse)
+library(lubridate)
+source("../../scripts/viridis.R")
+source("../../scripts/ggprob.R")
+```
+
+## Introduction
+
+As the COVID-19 Pandemic swept through the nation, fears of the virus prompted swift action from local, state, and federal governments to contain the outbreak and limit infections. Various solutions were proposed with promises to "solve" the outbreak and limit deaths, but many, such as hydroxychloroquine, were abandoned once found to be ineffective. And, besides the vaccine, none occupy our daily lives like our nationwide mask mandates. These requirements have been highly controversial, and while proponents of the mandates argue that they may stop the spread of droplets which, when exhaled, carry the disease, many oppose the idea because they question their efficacy. This polarization has often split across locations, cultures, and political party lines. 
+
+The question we are investigating is how mask use, political lean, male population percentage, median age, and median income is correlated to both COVID-19 cases and deaths per their respective populations. Our focus was on the average number of cases and deaths per county throughout December of 2020. Our thesis is that  counties that have higher mask usage, a greater political lean towards the democratic party, a lower male percentage, a lower median age, and a higher median income and will have relatively smaller proportion of COVID cases and deaths. 
+
+## Background
+
+The data is collected from five 
+^[https://github.com/nytimes/covid-19-data/blob/master/mask-use/mask-use-by-county.csv]
+^[https://www.kaggle.com/headsortails/covid19-us-county-jhu-data-demographics?select=covid_us_county.csv]
+^[https://www.kaggle.com/headsortails/covid19-us-county-jhu-data-demographics?select=us_county.csv]
+^[https://www.kaggle.com/goldenoakresearch/us-household-income-stats-geo-locations?select=kaggle_income.csv]
+^[https://github.com/tonmcg/US_County_Level_Election_Results_08-20/blob/master/2020_US_County_Level_Presidential_Results.csv]
+different datasets, all found on either GitHub or Kaggle, which were then filtered, mutated, and combined into one single data set. Outliers in the number of cases and deaths relative to the population size were removed from the combined dataset prior to any analysis.
+
+The data relates to the question because it contains the counties, populations of the counties, and COVID cases and deaths which will allow us to analyze the data based off certain factors and get results from the data. 
+
+Some unusual factors may be due to the vaccine, which had been distributed to some degree in December of 2020. Also, different weather conditions across the country will have effects on transmission, which we are not controlling for in the data. We also are not controlling for population density, though some of that is implied by using a ratio of the number of COVID cases and deaths to the population per county.
+
+The variables and their meanings:
+
+- `fips_code`, unique number which identifies each county
+- `county`, the name of the county
+- `state`, the name of the state to which the counties belong to
+- `cases`, the total number of COVID cases per county
+- `deaths`, the total number of deaths per county
+- `population`, the total population per county
+- `cases_to_pop`, number of cases / population size
+- `deaths_to_pop`, number of deaths / population size
+- `mask_use_index`, weighted sum of the mask usage proportions. The Mask Use Index is a number from 0 to 100 based on the frequency by which the population uses a Mask. A Mask Use Index of 0 indicates that no one in the population ever uses a mask, and a Mask Use Index of 100 indicates that everyone in the population always uses a mask.
+- `median_age`, median age of people in the county
+- `male_pct`, percentage of the county that is male
+- `state_median_inc`, median income of the population in the state
+- `per_dem`, percentage of the population which is democratic
+- `mask_use_index_rating`, variable which is 'high' if the mask use of the county is above the median mask use overall, and 'low' if it is below
+- `median_age_rating`, variable which is 'high' if the age of the county is above the median age overall, and 'low' if it is below
+- `male_pct_rating`, variable which is 'high' if the male population percentage of the county is above the median overall, and 'low' if it is below
+- `state_median_inc_rating`, variable which is 'high' if the median income of the county is above the median overall, and 'low' if it is below
+- `per_dem_rating`, variable which is 'high' if the proportion of democrats of the county is above the median overall, and 'low' if it is below
+
+With the rest of the report, we will be Graphing and Conducting Two Sample T-Tests to compare different variables in the data set and find trends in how they relate to the number of COVID Cases and Deaths. 
+
+```{r, include=FALSE, echo=FALSE}
+#Creating Combined Dataset
+
+mask_use_by_county <- read_csv("mask-use-by-county.csv")
+covid_by_county <- read_csv("covid_us_county.csv")
+county_data <- read_csv("us_county.csv")
+income_by_county <- read_csv("kaggle_income.csv")
+presidential_results <- read_csv("2020_US_County_Level_Presidential_Results.csv")
+
+covid_by_county <- covid_by_county %>%
+  rename(fips_code = fips) %>%
+  mutate(fips_code = as.character(fips_code)) %>%
+  mutate(fips_code = 
+           case_when(nchar(fips_code) == 1 ~ str_c("0000", fips_code),
+                     nchar(fips_code) == 2 ~ str_c("000", fips_code),
+                     nchar(fips_code) == 3 ~ str_c("00", fips_code),
+                     nchar(fips_code) == 4 ~ str_c("0", fips_code),
+                     TRUE ~ fips_code)) %>%
+  mutate(year = year(date),
+         month = month(date)) %>%
+  filter(year == 2020,
+         month == 12) %>%
+  select(fips_code, county, state, cases, deaths) %>%
+  group_by(fips_code, county, state) %>%
+  summarize(cases = sum(cases)/n(),
+            deaths = sum(deaths)/n()) %>%
+  drop_na() %>%
+  arrange(fips_code)
+
+mask_use_by_county <- mask_use_by_county %>%
+  rename(fips_code = COUNTYFP) %>%
+  mutate(mask_use_index = (20*NEVER) + (40*RARELY) + (60*SOMETIMES) + (80*FREQUENTLY) + (100*ALWAYS)) %>%
+  select(fips_code, mask_use_index) %>%  
+  drop_na() %>%
+  arrange(fips_code)
+
+county_data <- county_data %>%
+  rename(fips_code = fips,
+         abbr = state_code) %>%
+  mutate(fips_code = as.character(fips_code),
+         male_pct = 100 - female_percentage) %>%
+  mutate(fips_code = 
+           case_when(nchar(fips_code) == 1 ~ str_c("0000", fips_code),
+                     nchar(fips_code) == 2 ~ str_c("000", fips_code),
+                     nchar(fips_code) == 3 ~ str_c("00", fips_code),
+                     nchar(fips_code) == 4 ~ str_c("0", fips_code),
+                     TRUE ~ fips_code)) %>%
+  select(fips_code, median_age, male_pct, population) %>%
+  drop_na() %>%
+  arrange(fips_code)
+
+income_by_state <- income_by_county %>%
+  rename(state = State_Name,
+         median_inc = Median) %>%
+  select(state, median_inc) %>%
+  group_by(state) %>%
+  summarize(state_median_inc = median(median_inc)) %>%
+  arrange(state)
+
+presidential_results <- presidential_results %>%
+  rename(fips_code = county_fips) %>%
+  select(fips_code, per_dem)
+
+combined_data <- covid_by_county %>%
+  inner_join(mask_use_by_county, by = "fips_code") %>%
+  inner_join(county_data, by = "fips_code") %>%
+  inner_join(income_by_state, by = "state") %>%
+  inner_join(presidential_results, by = "fips_code") %>%
+  mutate(cases_to_pop = cases/population,
+         deaths_to_pop = deaths/population) %>%
+  arrange(fips_code)
+
+median_mask_use_index = median(combined_data$mask_use_index)
+median_median_age = median(combined_data$median_age)
+median_male_pct = median(combined_data$male_pct)
+median_state_median_inc = median(combined_data$state_median_inc)
+median_per_dem = median(combined_data$per_dem)
+
+# A rating of "high" means above the 50th percentile, a rating of "low" means below the 50th percentile
+
+combined_data <- combined_data %>%
+  mutate(mask_use_index_rating =
+           case_when(mask_use_index > median_mask_use_index ~ "high",
+                     TRUE ~ "low"),
+         median_age_rating =
+           case_when(median_age > median_median_age ~ "high",
+                     TRUE ~ "low"),
+         male_pct_rating =
+           case_when(male_pct > median_male_pct ~ "high",
+                     TRUE ~ "low"),
+         state_median_inc_rating =
+           case_when(state_median_inc > median_state_median_inc ~ "high",
+                     TRUE ~ "low"),
+         per_dem_rating =
+           case_when(per_dem > median_per_dem ~ "high",
+                     TRUE ~ "low")) %>%
+  select(fips_code, county, state, cases, deaths, population, cases_to_pop, deaths_to_pop, mask_use_index, median_age, male_pct, state_median_inc, per_dem, mask_use_index_rating, median_age_rating, male_pct_rating, state_median_inc_rating, per_dem_rating) %>%
+  arrange(fips_code)
+```
+
+```{r, include=FALSE, echo=FALSE}
+#Removing Outliers in Cases to Population Ratio
+
+lower_quartile <- quantile(combined_data$cases_to_pop, 0.25)
+upper_quartile <- quantile(combined_data$cases_to_pop, 0.75)
+iqr <- upper_quartile - lower_quartile
+
+lower_bound = lower_quartile - (1.5*iqr)
+upper_bound = upper_quartile + (1.5*iqr)
+
+combined_data_without_cases_outliers <- combined_data %>%
+  filter((cases_to_pop >= lower_bound) & (cases_to_pop<= upper_bound))
+```
+
+```{r, include=FALSE, echo=FALSE}
+#Removing Outliers in Cases to Population Ratio
+
+lower_quartile <- quantile(combined_data$deaths_to_pop, 0.25)
+upper_quartile <- quantile(combined_data$deaths_to_pop, 0.75)
+iqr <- upper_quartile - lower_quartile
+
+lower_bound = lower_quartile - (1.5*iqr)
+upper_bound = upper_quartile + (1.5*iqr)
+
+combined_data_without_deaths_outliers <- combined_data %>%
+  filter((deaths_to_pop >= lower_bound) & (deaths_to_pop<= upper_bound))
+```
+
+## Analysis
+
+### Part A: COVID Cases
+
+We will use graphs of the COVID Cases to Population Ratio vs. the variable we are analyzing to visually see the relationship between the variable and the COVID Cases to Population Ratio. A red, linear trendline will also be added to each graph to highlight the trend.
+
+Additionally, we will use Two Sample T-Tests to compare the mean COVID Cases to Population Ratio between different sets of counties, split based on a certain variable (elaboration in following paragraph). T-Tests are used to see if the difference between the means of two populations is statistically significant^[https://www.datanovia.com/en/lessons/how-to-do-a-t-test-in-r-calculation-and-reporting/how-to-do-paired-t-test-in-r/]. We use a Two Sample T-Test here for a few reasons. First, the groups we will be comparing are completely independent. Second, the population variance is unknown, so we should use a t-distribution^[https://math.stackexchange.com/questions/1446182/when-the-population-variance-is-unknown-we-should-use-t-distribution#]. Third, the sample sizes for the tests will be equal, and we do not know if the population variances are necessarily equal, so we should use a T-Test as it is very robust against unequal variances^[http://daniellakens.blogspot.com/2015/01/always-use-welchs-t-test-instead-of.html]. For these reasons, a T-Test appears to be fitting.
+
+When splitting the population into two, we will separate them into two categories, one of "high" values and one of "low" values based on the given variable. "High" values are those that fall above the 50th percentile of values of that variable. "Low" values are those that fall below the 50th percentile of values of that variable. We will use our statistical model to examine the difference between the means of the "high" values and the "low" values.
+
+```{r, echo=FALSE}
+combined_data <- combined_data_without_cases_outliers
+```
+
+#### 1. Mask Usage
+
+##### Graph of COVID Cases to Population Size Ratio vs. Mask Use Index 
+
+```{r, include=TRUE, echo=FALSE}
+options(scipen=10000)
+ggplot(combined_data, aes(x=mask_use_index, y=cases_to_pop)) +
+  geom_point(size = 1) +
+  geom_smooth(method = lm, 
+              se = FALSE, 
+              color = "red",
+              size = 1) +
+  xlab("Mask Usage Index") +
+  ylab("Cases to Population Ratio") +
+  ggtitle("Cases to Population Ratio vs. Mask Usage Index")
+```
+
+##### T-Test to Compare the Mean COVID Cases to Population Size Ratio between Counties with High and Low Mask Usage
+
+```{r, include=FALSE, echo=FALSE}
+# Compute t-test
+res <- t.test(cases_to_pop ~ mask_use_index_rating, data = combined_data, paired = FALSE)
+res
+```
+
+We will consider the null to be the case where the mean COVID Cases to Population Size Ratio of the two populations are equal with a two-sided alternative.
+
+$$
+H_0: μ_1 = μ_2 \\
+H_a: μ_1 \neq μ_2
+$$
+The test statistic is...
+
+$$
+t = \frac{\bar{μ}_1 - \bar{μ}_2}{\sqrt{\frac{σ_1^2}{n_1} + \frac{σ_2^2}{n_2}}}
+$$
+
+The p-value we get from this T-Test is less than 0.00000000000000022 which is about 1 in 4,545,454,500,000,000. This is highly statistically significant. There is strong evidence that the null hypothesis is false, thus we reject the null hypothesis that the true difference in means of the ratio of the number of cases to population of counties between counties below the 50th percentile mask use index and counties above the 50th percentile mask use index is equal to 0. 
+
+Additionally, the 95% confidence interval for the difference in means that we get from this T-Test extends from the ratio of the number of cases to the population being 0.01716799 lower to 0.01419653 lower. This is consistent with there being a difference in ratios.
+
+#### 2. Male Population Percentage
+
+##### Graph of COVID Cases to Population Size Ratio vs. Male Population Percentage
+
+```{r, include=TRUE, echo=FALSE}
+options(scipen=10000)
+ggplot(combined_data, aes(x=male_pct, y=cases_to_pop)) +
+  geom_point(size = 1) +
+  geom_smooth(method = lm, 
+              se = FALSE, 
+              color = "red",
+              size = 1) +
+  xlab("Male Population Percentage") +
+  ylab("Cases to Population Ratio") +
+  ggtitle("Cases to Population Ratio vs. Male Population Percentage")
+```
+
+##### T-Test to Compare the Mean COVID Cases to Population Ratio between Counties with High and Low Male Population Percentage
+
+```{r, include=FALSE, echo=FALSE}
+# Compute t-test
+res <- t.test(cases_to_pop ~ male_pct_rating, data = combined_data, paired = FALSE)
+res
+```
+
+We will consider the null to be the case where the mean COVID Cases to Population Size Ratio of the two populations are equal with a two-sided alternative.
+
+$$
+H_0: μ_1 = μ_2 \\
+H_a: μ_1 \neq μ_2
+$$
+The test statistic is...
+
+$$
+t = \frac{\bar{μ}_1 - \bar{μ}_2}{\sqrt{\frac{σ_1^2}{n_1} + \frac{σ_2^2}{n_2}}}
+$$
+
+The p-value we get from this T-Test is about 0.0000006277 which is about 1 in 1,593,117. This is highly statistically significant. There is strong evidence that the null hypothesis is false, thus we reject the null hypothesis that the true difference in means of the ratio of the number of cases to population of counties between counties below the 50th percentile male population percentage and counties above the 50th percentile male population percentage is equal to 0. 
+
+Additionally, the 95% confidence interval for the difference in means that we get from this T-Test extends from the ratio of the number of cases to the population being 0.002449886 higher to 0.005617745 higher. This is consistent with there being a difference in ratios.
+
+#### 3. Percentage of Democrat Voters in the 2020 Election
+
+##### Graph of COVID Cases to Population Size Ratio vs. Percentage of Democrat Voters in the 2020 Election
+
+```{r, include=TRUE, echo=FALSE}
+options(scipen=10000)
+ggplot(combined_data, aes(x=per_dem, y=cases_to_pop)) +
+  geom_point(size = 1) +
+  geom_smooth(method = lm, 
+              se = FALSE, 
+              color = "red",
+              size = 1) +
+  xlab("Percentage of Democrat Voters (in 2020 Election)") +
+  ylab("Cases to Population Ratio") +
+  ggtitle("Cases to Population Ratio vs. Percentage of Democrat Voters")
+```
+
+##### T-Test to Compare the Mean COVID Cases to Population Ratio between Counties with High and Low Percentage Democrat Voters in the 2020 Election
+
+```{r, include=FALSE, echo=FALSE}
+# Compute t-test
+res <- t.test(cases_to_pop ~ per_dem_rating, data = combined_data, paired = FALSE)
+res
+```
+
+We will consider the null to be the case where the mean COVID Cases to Population Size Ratio of the two populations are equal with a two-sided alternative.
+
+$$
+H_0: μ_1 = μ_2 \\
+H_a: μ_1 \neq μ_2
+$$
+The test statistic is...
+
+$$
+t = \frac{\bar{μ}_1 - \bar{μ}_2}{\sqrt{\frac{σ_1^2}{n_1} + \frac{σ_2^2}{n_2}}}
+$$
+
+The p-value we get from this T-Test is about 0.00000000000006485 which is about 1 in 15,420,200,000,000. This is highly statistically significant. There is strong evidence that the null hypothesis is false, thus we reject the null hypothesis that the true difference in means of the ratio of the number of cases to population of counties between counties below the 50th percentile number of democrat voters in the 2020 Election and counties above the 50th percentile number of democrat voters in the 2020 Election is equal to 0. 
+
+Additionally, the 95% confidence interval for the difference in means that we get from this T-Test extends from the ratio of the number of cases to the population being 0.007608819 lower to 0.004466066 lower. This is consistent with there being a difference in ratios.
+
+#### 4. Median Age
+
+##### Graph of COVID Cases to Population Size Ratio vs. Median Age
+
+```{r, include=TRUE, echo=FALSE}
+options(scipen=10000)
+ggplot(combined_data, aes(x=median_age, y=cases_to_pop)) +
+  geom_point(size = 1) +
+  geom_smooth(method = lm, 
+              se = FALSE, 
+              color = "red",
+              size = 1) +
+  xlab("Median Age") +
+  ylab("Cases to Population Ratio") +
+  ggtitle("Cases to Population Ratio vs. Median Age")
+```
+
+##### T-Test to Compare the Mean COVID Cases to Population Size Ratio between Counties with High and Low Median Age
+
+```{r, include=FALSE, echo=FALSE}
+# Compute t-test
+res <- t.test(cases_to_pop ~ median_age_rating, data = combined_data, paired = FALSE)
+res
+```
+
+We will consider the null to be the case where the mean COVID Cases to Population Size Ratio of the two populations are equal with a two-sided alternative.
+
+$$
+H_0: μ_1 = μ_2 \\
+H_a: μ_1 \neq μ_2
+$$
+The test statistic is...
+
+$$
+t = \frac{\bar{μ}_1 - \bar{μ}_2}{\sqrt{\frac{σ_1^2}{n_1} + \frac{σ_2^2}{n_2}}}
+$$
+
+The p-value we get from this T-Test is less than 0.00000000000000022 which is about 1 in 4,545,454,500,000,000. This is highly statistically significant. There is strong evidence that the null hypothesis is false, thus we reject the null hypothesis that the true difference in means of the ratio of the number of cases to population of counties between counties below the 50th percentile median age and counties above the 50th percentile median age is equal to 0. 
+
+Additionally, the 95% confidence interval for the difference in means that we get from this T-Test extends from the ratio of the number of cases to the population being 0.009869368 lower to 0.009869368 lower. This is consistent with there being a difference in ratios.
+
+#### 5. Median Income of States
+
+##### Graph of COVID Cases to Population Size Ratio vs. Median Income of the State in Which the County Is
+
+```{r, include=TRUE, echo=FALSE}
+ggplot(combined_data, aes(x=state_median_inc, y=cases_to_pop)) +
+  geom_point(size = 1) +
+  geom_smooth(method = lm, 
+              se = FALSE, 
+              color = "red",
+              size = 1) +
+  xlab("State Median Income") +
+  ylab("Cases to Population Ratio") +
+  ggtitle("Cases to Population Ratio vs. State Median Income")
+```
+
+##### T-Test to Compare the Mean COVID Cases to Population Ratio between Counties in States with with High and Low Median Income
+
+```{r, include=FALSE, echo=FALSE}
+# Compute t-test
+res <- t.test(cases_to_pop ~ state_median_inc_rating, data = combined_data, paired = FALSE)
+res
+```
+
+We will consider the null to be the case where the mean COVID Cases to Population Size Ratio of the two populations are equal with a two-sided alternative.
+
+$$
+H_0: μ_1 = μ_2 \\
+H_a: μ_1 \neq μ_2
+$$
+The test statistic is...
+
+$$
+t = \frac{\bar{μ}_1 - \bar{μ}_2}{\sqrt{\frac{σ_1^2}{n_1} + \frac{σ_2^2}{n_2}}}
+$$
+
+The p-value we get from this T-Test is about 0.0002001 which is about 1 in 4998. This is highly statistically significant. There is strong evidence that the null hypothesis is false, thus we reject the null hypothesis that the true difference in means of the ratio of the number of cases to population of counties between counties in states below the 50th percentile median income and counties in states above the 50th percentile median income is equal to 0. 
+
+Additionally, the 95% confidence interval for the difference in means that we get from this T-Test extends from the ratio of the number of cases to the population being 0.004653773 lower to 0.001443415 lower. This is consistent with there being a difference in ratios.
+
+### Part B: COVID Deaths
+
+We will use graphs of the COVID Deaths to Population Ratio vs. the variable we are analyzing to visually see the relationship between the variable and the COVID Deaths to Population Ratio. A magenta, linear trendline will also be added to each graph to highlight the trend.
+
+Additionally, we will use Two Sample T-Tests to compare the mean COVID Deaths to Population Ratio between different sets of counties, split based on a certain variable (elaboration in following paragraph). T-Tests are used to see if the difference between the means of two populations is statistically significant. We use a Two Sample T-Test here for a few reasons. First, the groups we will be comparing are completely independent. Second, the population variance is unknown, so we should use a t-distribution. Third, the sample sizes for the tests will be equal, and we do not know if the population variances are necessarily equal, so we should use a T-Test as it is very robust against unequal variances. For these reasons, a T-Test appears to be fitting.
+
+When splitting the population into two, we will separate them into two categories, one of "high" values and one of "low" values based on the given variable. "High" values are those that fall above the 50th percentile of values of that variable. "Low" values are those that fall below the 50th percentile of values of that variable. We will use our statistical model to examine the difference between the means of the "high" values and the "low" values.
+
+```{r, echo = FALSE}
+combined_data <- combined_data_without_deaths_outliers
+```
+
+##### 1. Mask Usage
+
+##### Deaths/Population Ratio vs. Mask Use Index 
+
+```{r, include = TRUE, echo = FALSE}
+options(scipen=10000)
+ggplot(combined_data, aes(x=mask_use_index, y=deaths_to_pop)) + geom_point(size = 1) + geom_smooth(method = lm, se = FALSE, color = "magenta", size = 1) +
+  xlab("Mask Usage Index") +
+  ylab("Deaths to Population Ratio") +
+  ggtitle("Deaths to Population Ratio vs. Mask Usage Index")
+```
+
+#### T-Test to Compare the Mean COVID Deaths to Population Ratio between Counties with High and Low Mask Usage
+
+```{r, include=FALSE, echo=FALSE}
+# Compute t-test
+res <- t.test(deaths_to_pop ~ mask_use_index_rating, data = combined_data, paired = FALSE)
+res
+```
+
+We will consider the null to be the case where the mean COVID Deaths to Population Size Ratio of the two populations are equal with a two-sided alternative.
+
+$$
+H_0: μ_1 = μ_2 \\
+H_a: μ_1 \neq μ_2
+$$
+The test statistic is...
+
+$$
+t = \frac{\bar{μ}_1 - \bar{μ}_2}{\sqrt{\frac{σ_1^2}{n_1} + \frac{σ_2^2}{n_2}}}
+$$
+
+The p-value we get from this T-Test is about 0.0000000005715 which is about 1 in 1,749,781,277. This is highly statistically significant. There is strong evidence that the null hypothesis is false, thus we reject the null hypothesis that the true difference in means of the ratio of the number of deaths to population of counties between counties below the 50th percentile mask use index and counties above the 50th percentile mask use index is equal to 0. 
+
+Additionally, the 95% confidence interval for the difference in means that we get from this T-Test extends from the ratio of the number of cases to the population being 0.00017298652 lower to 0.00009005017 lower. This is consistent with there being a difference in ratios.
+
+#### 2. Male Population Percentage
+
+##### Graph of COVID Deaths to Population Ratio vs. Male Population Percentage
+
+```{r, include=TRUE, echo=FALSE}
+options(scipen=10000)
+ggplot(combined_data, aes(x=male_pct, y=deaths_to_pop)) +
+  geom_point(size = 1) +
+  geom_smooth(method = lm, 
+              se = FALSE, 
+              color = "magenta",
+              size = 1) +
+  xlab("Male Population Percentage") +
+  ylab("Deaths to Population Ratio") +
+  ggtitle("Deaths to Population Ratio vs. Male Population Percentage")
+```
+
+##### T-Test to Compare the Mean COVID Deaths to Population Ratio between Counties with High and Low Male Population Percentage
+
+```{r, include=FALSE, echo=FALSE}
+# Compute t-test
+res <- t.test(deaths_to_pop ~ male_pct_rating, data = combined_data, paired = FALSE)
+res
+```
+
+We will consider the null to be the case where the mean COVID Deaths to Population Size Ratio of the two populations are equal with a two-sided alternative.
+
+$$
+H_0: μ_1 = μ_2 \\
+H_a: μ_1 \neq μ_2
+$$
+The test statistic is...
+
+$$
+t = \frac{\bar{μ}_1 - \bar{μ}_2}{\sqrt{\frac{σ_1^2}{n_1} + \frac{σ_2^2}{n_2}}}
+$$
+
+The p-value we get from this T-Test is about 0.003467 which is about 1 in 288. This is highly statistically significant. There is strong evidence that the null hypothesis is false, thus we reject the null hypothesis that the true difference in means of the ratio of the number of deaths to population of counties between counties below the 50th percentile male population percentage and counties above the 50th percentile male population percentage is equal to 0.
+
+Additionally, the 95% confidence interval for the difference in means that we get from this T-Test extends from the ratio of the number of cases to the population being 0.00010383522 lower to 0.00002049871 lower This is consistent with there being a difference in ratios.
+
+#### 3. Percentage of Democrat Voters in the 2020 Election
+
+##### Graph of COVID Deaths to Population Ratio vs. Percentage of Democrat Voters in the 2020 Election
+
+```{r, include=TRUE, echo=FALSE}
+options(scipen=10000)
+ggplot(combined_data, aes(x=per_dem, y=deaths_to_pop)) +
+  geom_point(size = 1) +
+  geom_smooth(method = lm, 
+              se = FALSE, 
+              color = "magenta",
+              size = 1) +
+  xlab("Percentage of Democrat Voters (in 2020 Election)") +
+  ylab("Deaths to Population Ratio") +
+  ggtitle("Deaths to Population Ratio vs. Percentage of Democrat Voters")
+```
+
+##### T-Test to Compare the Mean COVID Cases to Population Ratio between Counties with High and Low Percentage Democrat Voters in the 2020 Election
+
+```{r, include=FALSE, echo=FALSE}
+# Compute t-test
+res <- t.test(deaths_to_pop ~ per_dem_rating, data = combined_data, paired = FALSE)
+res
+```
+
+We will consider the null to be the case where the mean COVID Deaths to Population Size Ratio of the two populations are equal with a two-sided alternative.
+
+$$
+H_0: μ_1 = μ_2 \\
+H_a: μ_1 \neq μ_2
+$$
+The test statistic is...
+
+$$
+t = \frac{\bar{μ}_1 - \bar{μ}_2}{\sqrt{\frac{σ_1^2}{n_1} + \frac{σ_2^2}{n_2}}}
+$$
+
+The p-value we get from this T-Test is about 0.04728 which is about 1 in 21. This is statistically significant. There is strong evidence that the null hypothesis is false, thus we reject the null hypothesis that the true difference in means of the ratio of the number of deaths to population of counties between counties below the 50th percentile number of democrat voters in the 2020 Election and counties above the 50th percentile number of democrat voters in the 2020 Election is equal to 0. 
+
+Additionally, the 95% confidence interval for the difference in means that we get from this T-Test extends from the ratio of the number of cases to the population being 0.0000838941593 lower to 0.0000005075959 lower. This is consistent with there being a difference in ratios.
+
+
+#### 4. Median Age
+
+##### Graph of COVID Deaths to Population Ratio vs. Median Age
+
+```{r, include=TRUE, echo=FALSE}
+options(scipen=10000)
+ggplot(combined_data, aes(x=median_age, y=deaths_to_pop)) +
+  geom_point(size = 1) +
+  geom_smooth(method = lm, 
+              se = FALSE, 
+              color = "magenta",
+              size = 1) +
+  xlab("Median Age") +
+  ylab("Deaths to Population Ratio") +
+  ggtitle("Deaths to Population Ratio vs. Median Age")
+```
+
+##### T-Test to Compare the Mean COVID Deaths to Population Ratio between Counties with High and Low Median Age
+
+```{r, include=FALSE, echo=FALSE}
+# Compute t-test
+res <- t.test(deaths_to_pop ~ median_age_rating, data = combined_data, paired = FALSE)
+res
+```
+
+We will consider the null to be the case where the mean COVID Deaths to Population Size Ratio of the two populations are equal with a two-sided alternative.
+
+$$
+H_0: μ_1 = μ_2 \\
+H_a: μ_1 \neq μ_2
+$$
+The test statistic is...
+
+$$
+t = \frac{\bar{μ}_1 - \bar{μ}_2}{\sqrt{\frac{σ_1^2}{n_1} + \frac{σ_2^2}{n_2}}}
+$$
+
+The p-value we get from this T-Test is about 0.00000106 which is about 1 in 943,396. This is highly statistically significant. There is strong evidence that the null hypothesis is false, thus we reject the null hypothesis that the true difference in means of the ratio of the number of cases to population of counties between counties below the 50th percentile median age and counties above the 50th percentile median age is equal to 0.
+
+Additionally, the 95% confidence interval for the difference in means that we get from this T-Test extends from the ratio of the number of cases to the population being 0.0001452155 lower to 0.0000620954 lower. This is consistent with there being a difference in ratios.
+
+
+#### 5. Median Income of States
+
+##### Graph of COVID Deaths to Population Ratio vs. Median Income of the State in Which the County Is
+
+```{r, include=TRUE, echo=FALSE}
+ggplot(combined_data, aes(x=state_median_inc, y=deaths_to_pop)) +
+  geom_point(size = 1) +
+  geom_smooth(method = lm, 
+              se = FALSE, 
+              color = "magenta",
+              size = 1) +
+  xlab("State Median Income") +
+  ylab("Deaths to Population Ratio") +
+  ggtitle("Deaths to Population Ratio vs. State Median Income")
+```
+
+##### T-Test to Compare the Mean COVID deaths to Population Ratio between Counties in States with with High and Low Median Income
+
+```{r, include=FALSE, echo=FALSE}
+# Compute t-test
+res <- t.test(deaths_to_pop ~ state_median_inc_rating, data = combined_data, paired = FALSE)
+res
+```
+
+We will consider the null to be the case where the mean COVID Deaths to Population Size Ratio of the two populations are equal with a two-sided alternative.
+
+$$
+H_0: μ_1 = μ_2 \\
+H_a: μ_1 \neq μ_2
+$$
+The test statistic is...
+
+$$
+t = \frac{\bar{μ}_1 - \bar{μ}_2}{\sqrt{\frac{σ_1^2}{n_1} + \frac{σ_2^2}{n_2}}}
+$$
+
+The p-value we get from this T-Test is about 0.00000000007387 which is about 1 in 13,537,295,248 This is highly statistically significant. There is strong evidence that the null hypothesis is false, thus we reject the null hypothesis that the true difference in means of the ratio of the number of cases to population of counties between counties in states below the 50th percentile median income and counties in states above the 50th percentile median income is equal to 0.
+
+Additionally, the 95% confidence interval for the difference in means that we get from this T-Test extends from the ratio of the number of cases to the population being 0.00017975066 lower to 0.00009679482 lower. This is consistent with there being a difference in ratios.
+
+## Discussion
+
+We looked at Mask Usage, Male Population Percentage, Percentage of Democrat Voters (based on the 2020 Election), Median Age, and Median Income of the state a county is in, and how these factors would affect the ratio of the number of COVID Cases to Population and the ratio of the number of COVID Deaths to Population in a county. 
+
+Based on our analysis of our graphs and statistical models we found that the number of COVID Cases relative to the size of the population is generally minimized when counties have higher mask usage, have a lower male percentage, have a higher percentage of Democrat Voters (in the 2020 election), have a higher median age, and are located in a state with a higher median income. 
+
+As for COVID Deaths, the number of COVID Deaths relative to the size of the population is generally minimized when counties have higher mask usage, have a higher male percentage, have a higher percentage of Democrat Voters (in the 2020 election), have a higher median age, and are located in a state with a higher median income. 
+
+Potential short-comings of our analysis include our using data from December 2020 to analyze the number of COVID Cases and Deaths. We decided to prioritize recency while also avoiding using data that coincided with major vaccine rollout. However, the number of cases in December 2020 could be skewed by people traveling over winter break, visiting family for Thanksgiving/Christmas, or simply the fact that there may have been events hosted in some counties during this time period. Also, as mentioned previously, different weather conditions across the country will have effects on transmission, which we are not controlling for in the data. We also are not controlling for population density, though some of that is implied by using a ratio of the number of COVID cases and deaths to the population per county.
+
+Future directions of additional work on this matter include examining the relationship of these variables on the spread of other epidemics and expanding the scope of the analysis beyond just counties in the US to countries across the globe, by finding or collecting new data on other diseases and other geographical regions. We could also develop regression models based on our findings and trend-lines, and use these models to preemptively predict the spread of a disease in other cities.
